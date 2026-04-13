@@ -1,91 +1,60 @@
-# Script de instalação do Sophos Endpoint Protection
-# Suporta detecção automática de Servidor vs Workstation
+#Requires -Version 5.1
+# Sophos Endpoint silent install. URL from config\settings.psd1
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Instalação do Sophos Endpoint" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
+$ErrorActionPreference = 'Stop'
+$common = Join-Path $PSScriptRoot 'lib\Common.ps1'
+. $common
 
-# Verificar se está sendo executado como Administrador
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "ERRO: Este script precisa ser executado como Administrador!" -ForegroundColor Red
-    exit 1
-}
-
-# Definir variáveis
-$sophosInstallerUrl = "https://api.stn100gru.ctr.sophos.com/api/download/REMOVED_TOKEN/SophosSetup.exe"
-$installerPath = "$env:TEMP\SophosSetup.exe"
+$installerPath = Join-Path $env:TEMP 'SophosSetup.exe'
 
 try {
-    # Detectar tipo de sistema operacional
-    Write-Host "[INFO] Detectando tipo de sistema operacional..." -ForegroundColor Yellow
+    if (-not (Test-InstallAdministrator)) {
+        Write-InstallError 'Run this script as Administrator.'
+        exit 1
+    }
+
+    Initialize-InstallLogging -Prefix 'sophos'
+    Write-InstallHeader 'Sophos Endpoint installation'
+
+    $settings = Import-InstallSettings
+    if ($settings.CheckInternet) {
+        $to = if ($settings.NetworkTimeoutSeconds) { [int]$settings.NetworkTimeoutSeconds } else { 30 }
+        Test-InstallInternet -TimeoutSeconds $to | Out-Null
+    }
+
+    $sophosInstallerUrl = $settings.SophosInstallerUrl
+    $installArgs = if ($settings.SophosInstallArgs) { $settings.SophosInstallArgs } else { '--quiet' }
+
     $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-    $productType = $osInfo.ProductType
-    
-    # ProductType: 1 = Workstation, 2 = Domain Controller, 3 = Server
-    $isServer = $productType -ne 1
-    
-    if ($isServer) {
-        Write-Host "       Sistema detectado: SERVIDOR" -ForegroundColor Cyan
-        $systemType = "Servidor"
-    } else {
-        Write-Host "       Sistema detectado: ESTAÇÃO DE TRABALHO" -ForegroundColor Cyan
-        $systemType = "Workstation"
-    }
-    
-    # Baixar o instalador
-    Write-Host ""
-    Write-Host "[1/2] Baixando Sophos Endpoint Setup..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri $sophosInstallerUrl -OutFile $installerPath -ErrorAction Stop
-    Write-Host "      Download concluído com sucesso!" -ForegroundColor Green
-    
-    # Instalar o Sophos
-    Write-Host "[2/2] Instalando Sophos Endpoint..." -ForegroundColor Yellow
-    Write-Host "      Aguarde, este processo pode levar alguns minutos..." -ForegroundColor Yellow
-    
-    # Parâmetros para instalação silenciosa
-    # --quiet: Instalação silenciosa sem interface gráfica
-    $installArgs = "--quiet"
-    
+    $isServer = $osInfo.ProductType -ne 1
+    $systemType = if ($isServer) { 'Server' } else { 'Workstation' }
+    Write-InstallInfo ("Detected OS type: {0}" -f $systemType)
+
+    Write-InstallInfo '[1/2] Downloading Sophos Setup...'
+    Invoke-WebRequest -Uri $sophosInstallerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+    Write-InstallSuccess 'Download completed.'
+
+    Write-InstallInfo '[2/2] Installing (silent)...'
     $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
-    
+
     if ($process.ExitCode -eq 0) {
-        Write-Host "      Instalação concluída com sucesso!" -ForegroundColor Green
+        Write-InstallSuccess 'Installation completed.'
     } elseif ($process.ExitCode -eq 3010) {
-        Write-Host "      Instalação concluída! Reinicialização necessária." -ForegroundColor Yellow
+        Write-InstallWarning 'Installation completed; reboot required.'
     } else {
-        throw "Falha na instalação. Código de saída: $($process.ExitCode)"
+        throw ("Installation failed. Exit code: {0}" -f $process.ExitCode)
     }
-    
-    # Limpar arquivo temporário
-    if (Test-Path $installerPath) {
-        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+    if (Test-Path -LiteralPath $installerPath) {
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
     }
-    
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Instalação do Sophos Endpoint concluída!" -ForegroundColor Green
-    Write-Host "Tipo de sistema: $systemType" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    
-    # Verificar se reinicialização é necessária
-    if ($process.ExitCode -eq 3010) {
-        Write-Host ""
-        Write-Host "ATENÇÃO: É necessário reiniciar o sistema para concluir a instalação." -ForegroundColor Yellow
-    }
-    
+
+    Write-InstallSuccess 'Sophos Endpoint installation finished.'
     exit 0
-}
-catch {
-    Write-Host ""
-    Write-Host "ERRO durante a instalação: $_" -ForegroundColor Red
-    
-    # Limpar arquivo temporário em caso de erro
-    if (Test-Path $installerPath) {
-        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-InstallError $_.Exception.Message
+    if (Test-Path -LiteralPath $installerPath) {
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
     }
-    
     exit 1
 }
-

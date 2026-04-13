@@ -1,77 +1,74 @@
-# Script de instalação do Wazuh Agent
-# Versão: 4.14.0-1
-# Manager: wazuh.vantix.com.br
+#Requires -Version 5.1
+# Wazuh Agent install for Windows. Settings: config\settings.psd1
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Instalação do Wazuh Agent" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
+param(
+    [string]$WazuhManager,
+    [string]$MsiUrl
+)
 
-# Verificar se está sendo executado como Administrador
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "ERRO: Este script precisa ser executado como Administrador!" -ForegroundColor Red
-    exit 1
-}
+$ErrorActionPreference = 'Stop'
+$common = Join-Path $PSScriptRoot 'lib\Common.ps1'
+. $common
 
-# Definir variáveis
-$wazuhInstallerUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.0-1.msi"
-$installerPath = "$env:TEMP\wazuh-agent.msi"
-$wazuhManager = "wazuh.vantix.com.br"
-
+$installerPath = $null
 try {
-    # Baixar o instalador
-    Write-Host "[1/3] Baixando Wazuh Agent..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri $wazuhInstallerUrl -OutFile $installerPath -ErrorAction Stop
-    Write-Host "      Download concluído com sucesso!" -ForegroundColor Green
-    
-    # Instalar o Wazuh Agent
-    Write-Host "[2/3] Instalando Wazuh Agent..." -ForegroundColor Yellow
-    $installArgs = "/i `"$installerPath`" /q WAZUH_MANAGER='$wazuhManager'"
-    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
-    
-    if ($process.ExitCode -eq 0) {
-        Write-Host "      Instalação concluída com sucesso!" -ForegroundColor Green
-    } else {
-        throw "Falha na instalação. Código de saída: $($process.ExitCode)"
+    if (-not (Test-InstallAdministrator)) {
+        Write-InstallError 'Run this script as Administrator.'
+        exit 1
     }
-    
-    # Iniciar o serviço
-    Write-Host "[3/3] Iniciando serviço Wazuh..." -ForegroundColor Yellow
+
+    Initialize-InstallLogging -Prefix 'wazuh'
+    Write-InstallHeader 'Wazuh Agent installation'
+
+    $settings = Import-InstallSettings
+    if ($settings.CheckInternet) {
+        $to = if ($settings.NetworkTimeoutSeconds) { [int]$settings.NetworkTimeoutSeconds } else { 30 }
+        Test-InstallInternet -TimeoutSeconds $to | Out-Null
+    }
+
+    $wazuhInstallerUrl = if ($MsiUrl) { $MsiUrl } else { $settings.WazuhMsiUrl }
+    $manager = if ($WazuhManager) { $WazuhManager } else { $settings.WazuhManager }
+    $uriObj = $null
+    if (-not [System.Uri]::TryCreate($wazuhInstallerUrl, [System.UriKind]::Absolute, [ref]$uriObj)) {
+        throw 'Invalid Wazuh MSI URL.'
+    }
+    $fileName = [System.IO.Path]::GetFileName($uriObj.LocalPath)
+    if ([string]::IsNullOrWhiteSpace($fileName)) {
+        $fileName = 'wazuh-agent.msi'
+    }
+    $installerPath = Join-Path $env:TEMP $fileName
+
+    Write-InstallInfo '[1/3] Downloading Wazuh Agent MSI...'
+    Invoke-WebRequest -Uri $wazuhInstallerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+    Write-InstallSuccess 'Download completed.'
+
+    Write-InstallInfo '[2/3] Installing...'
+    $installArgs = @('/i', "`"$installerPath`"", '/q', ('WAZUH_MANAGER={0}' -f $manager))
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
+    if ($process.ExitCode -ne 0) {
+        throw ("Installation failed. Exit code: {0}" -f $process.ExitCode)
+    }
+    Write-InstallSuccess 'Installation completed.'
+
+    Write-InstallInfo '[3/3] Starting Wazuh service...'
     Start-Sleep -Seconds 3
-    
-    # Tentar iniciar o serviço usando NET START
-    $startService = Start-Process -FilePath "net" -ArgumentList "start Wazuh" -Wait -PassThru -NoNewWindow
-    
+    $startService = Start-Process -FilePath 'net' -ArgumentList 'start', 'Wazuh' -Wait -PassThru -NoNewWindow
     if ($startService.ExitCode -eq 0) {
-        Write-Host "      Serviço iniciado com sucesso!" -ForegroundColor Green
+        Write-InstallSuccess 'Service started.'
     } else {
-        Write-Host "      Aviso: Falha ao iniciar o serviço automaticamente." -ForegroundColor Yellow
-        Write-Host "      Tente iniciar manualmente com: NET START Wazuh" -ForegroundColor Yellow
+        Write-InstallWarning 'Could not start service automatically. Try: NET START Wazuh'
     }
-    
-    # Limpar arquivo temporário
-    if (Test-Path $installerPath) {
-        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+    if (Test-Path -LiteralPath $installerPath) {
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
     }
-    
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Instalação do Wazuh Agent concluída!" -ForegroundColor Green
-    Write-Host "Manager: $wazuhManager" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    
+
+    Write-InstallSuccess ("Wazuh Agent ready. Manager: {0}" -f $manager)
     exit 0
-}
-catch {
-    Write-Host ""
-    Write-Host "ERRO durante a instalação: $_" -ForegroundColor Red
-    
-    # Limpar arquivo temporário em caso de erro
-    if (Test-Path $installerPath) {
-        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-InstallError $_.Exception.Message
+    if (Test-Path -LiteralPath $installerPath) {
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
     }
-    
     exit 1
 }
-

@@ -1,75 +1,64 @@
-#remove all zabbix cleint and local dir
+#Requires -Version 5.1
+# Remove Zabbix Agent packages, services, and related registry keys.
 
-Write-Host "Detecting current Zabbix Agents"
-Start-Sleep -Seconds 2
-
-$searchString = "Zabbix"
+$ErrorActionPreference = 'Continue'
+$common = Join-Path $PSScriptRoot 'lib\Common.ps1'
+. $common
 
 try {
-    $packages = Get-Package -Name "*$searchString*" -ErrorAction SilentlyContinue
-} catch {
-    $packages = @()
-}
-Clear-Host
+    if (-not (Test-InstallAdministrator)) {
+        Write-Host 'Administrator rights recommended for full removal.' -ForegroundColor Yellow
+    }
 
-if ($null -eq $packages -or $packages.Count -eq 0) {
-    Write-Host "No packages containin $searchString found"
-    Start-Sleep -Seconds 2
-} else {
-    Write-Host "The following packages were found::"
-    Start-Sleep -Seconds 2
-    $packages | Format-Table -AutoSize
+    Initialize-InstallLogging -Prefix 'remove_zabbix'
+    Write-InstallHeader 'Remove Zabbix Agent'
 
-    foreach ($package in $packages) {
-        Uninstall-Package -Name $package.Name -Confirm:$false
-        Write-Host "Pakiet $($package.Name) został odinstalowany."
-        Start-Sleep -Seconds 2
-        Clear-Host
+    $searchString = 'Zabbix'
+    Write-InstallInfo 'Detecting Zabbix packages...'
+    Start-Sleep -Seconds 1
 
-        # Delete related directories
-        $installPath = $package.InstallLocation
-        if ($installPath) {
-            Remove-Item -Path $installPath -Recurse -Force
-            Write-Host "Directory $installPath has been deleted."
-            Start-Sleep -Seconds 2
-            Clear-Host
-        } else {
-            Write-Host "Installation directory for package $($package.Name). not found."
-            Start-Sleep -Seconds 2
-            Clear-Host
+    try {
+        $packages = Get-Package -Name "*$searchString*" -ErrorAction SilentlyContinue
+    } catch {
+        $packages = @()
+    }
+
+    if ($null -eq $packages -or $packages.Count -eq 0) {
+        Write-InstallInfo 'No Zabbix packages found via Get-Package.'
+    } else {
+        $packages | Format-Table -AutoSize
+        foreach ($package in $packages) {
+            try {
+                Uninstall-Package -Name $package.Name -Confirm:$false -ErrorAction Stop
+                Write-InstallSuccess ("Uninstalled: {0}" -f $package.Name)
+            } catch {
+                Write-InstallWarning ("Uninstall failed for {0}: {1}" -f $package.Name, $_)
+            }
+            $installPath = $package.InstallLocation
+            if ($installPath -and (Test-Path -LiteralPath $installPath)) {
+                try {
+                    Remove-Item -LiteralPath $installPath -Recurse -Force -ErrorAction Stop
+                    Write-InstallInfo ("Removed directory: {0}" -f $installPath)
+                } catch {
+                    Write-InstallWarning ("Could not remove directory {0}: {1}" -f $installPath, $_)
+                }
+            }
+            Start-Sleep -Seconds 1
         }
     }
-}
-Write-Host "Removing Zabbix Agent keys from the registry"
-Start-Sleep -Seconds 2
-Clear-Host
-# Remove registry keys if they exist
-try {
-    Remove-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Zabbix Agent 2" -Recurse -ErrorAction SilentlyContinue
-} catch {
-    # Key may not exist
-}
-try {
-    Remove-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\System\Zabbix Agent" -Recurse -ErrorAction SilentlyContinue
-} catch {
-    # Key may not exist
-}
-Clear-Host
-Clear-Host
-Write-Host "Zabbix Agent registry keys removed"
-Start-Sleep -Seconds 2
-Clear-Host
-Clear-Host
-Write-Host "Removing Zabbix service"
-Start-Sleep -Seconds 2
-# Remove services if they exist
-$null = sc.exe delete "Zabbix Agent 2" 2>&1
-Start-Sleep -Seconds 1
-Clear-Host
-$null = sc.exe delete "Zabbix Agent" 2>&1
-Clear-Host
-Write-Host "Service removed"
-Start-Sleep -Seconds 2
-Clear-Host​
 
-exit 0
+    Write-InstallInfo 'Removing Zabbix-related registry keys (if present)...'
+    Remove-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Zabbix Agent 2' -Recurse -ErrorAction SilentlyContinue
+    Remove-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\System\Zabbix Agent' -Recurse -ErrorAction SilentlyContinue
+
+    Write-InstallInfo 'Removing Zabbix services...'
+    $null = & sc.exe delete 'Zabbix Agent 2' 2>&1
+    Start-Sleep -Seconds 1
+    $null = & sc.exe delete 'Zabbix Agent' 2>&1
+
+    Write-InstallSuccess 'Zabbix removal steps completed.'
+    exit 0
+} catch {
+    Write-InstallError $_.Exception.Message
+    exit 1
+}
