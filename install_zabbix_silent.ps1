@@ -1,268 +1,208 @@
-# Script de Instalação Silenciosa do Zabbix Agent
-# Baseado no script original com dados do proxy
+#Requires -Version 5.1
+# Silent Zabbix Agent install for Windows. Settings: config\settings.psd1
 
-function Check-Admin {
-    try {
-        # Get the current user identity
-        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-        # Check if the user belongs to the Local Administrators group
-        $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
-        return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-    } catch {
-        # Fallback if initial checks fail (unlikely, but good to be safe)
-        return $false
-    }
-}
-
-if (-Not (Check-Admin)) {
-    # Script requires elevation, restart with elevated rights
-    Write-Host "Este script requer privilégios de administrador para continuar." -ForegroundColor Yellow
-    Start-Process PowerShell.exe -Verb runAs -ArgumentList "-NoExit", "-File", "`"$PSCommandPath`""
-    Exit
-}
-
-# Variáveis de configuração (baseadas no script original)
-$zabbixAgentUrl = "https://cdn.zabbix.com/zabbix/binaries/stable/6.4/6.4.14/zabbix_agent-6.4.14-windows-amd64-openssl.msi"
-$downloadPath = "$env:TEMP\zabbix_agent-6.4.14-windows-amd64-openssl.msi"
-$zabbixProxyIp = "10.130.3.201"
-$zabbixServerIp = "10.130.3.201"
-$serviceName = "Zabbix Agent"
-
-# Obter hostname automaticamente
-# Primeiro tenta COMPUTERNAME, depois Hostname via WMI, e por último via .NET
-if ($env:COMPUTERNAME) {
-    $zabbixHostname = $env:COMPUTERNAME
-} elseif (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction SilentlyContinue) {
-    $zabbixHostname = (Get-WmiObject -Class Win32_ComputerSystem).Name
-} else {
-    $zabbixHostname = [System.Net.Dns]::GetHostName()
-}
-
-# Validação do hostname
-if ([string]::IsNullOrWhiteSpace($zabbixHostname)) {
-    Write-Error "Não foi possível determinar o hostname do computador. Abortando instalação."
-    exit 1
-}
-
-# Caminhos possíveis do arquivo de configuração
-$configPaths = @(
-    "C:\Program Files\Zabbix Agent\zabbix_agentd.conf",
-    "C:\Program Files (x86)\Zabbix Agent\zabbix_agentd.conf",
-    "C:\Program Files\Zabbix Agent 2\zabbix_agent2.conf",
-    "C:\Program Files (x86)\Zabbix Agent 2\zabbix_agent2.conf"
+param(
+    [string]$ZabbixServer,
+    [string]$ZabbixServerActive,
+    [string]$MsiUrl
 )
 
-# Função para verificar se o Zabbix já está instalado
+$ErrorActionPreference = 'Stop'
+$common = Join-Path $PSScriptRoot 'lib\Common.ps1'
+. $common
+
 function Test-ZabbixInstalled {
-    $zabbixService = Get-Service -Name "Zabbix*" -ErrorAction SilentlyContinue
-    if ($zabbixService) {
-        return $true
-    }
-    return $false
+    $zabbixService = Get-Service -Name 'Zabbix*' -ErrorAction SilentlyContinue
+    return [bool]$zabbixService
 }
 
-# Função para remover instalação anterior
 function Remove-ZabbixPrevious {
-    Write-Host "Instalação anterior do Zabbix detectada. Removendo..." -ForegroundColor Yellow
-    
-    # Parar serviços do Zabbix
-    $services = Get-Service -Name "Zabbix*" -ErrorAction SilentlyContinue
+    Write-InstallWarning 'Existing Zabbix installation detected. Removing...'
+
+    $services = Get-Service -Name 'Zabbix*' -ErrorAction SilentlyContinue
     foreach ($service in $services) {
-        if ($service.Status -eq "Running") {
+        if ($service.Status -eq 'Running') {
             Stop-Service -Name $service.Name -Force -ErrorAction SilentlyContinue
         }
     }
-    
-    # Desinstalar pacotes do Zabbix
-    $packages = Get-Package -Name "*Zabbix*" -ErrorAction SilentlyContinue
+
+    $packages = Get-Package -Name '*Zabbix*' -ErrorAction SilentlyContinue
     foreach ($package in $packages) {
         try {
             Uninstall-Package -Name $package.Name -Confirm:$false -ErrorAction SilentlyContinue
-            Write-Host "Pacote $($package.Name) removido." -ForegroundColor Green
+            Write-InstallSuccess ("Removed package: {0}" -f $package.Name)
         } catch {
-            Write-Warning "Não foi possível remover o pacote $($package.Name): $_"
+            Write-InstallWarning ("Could not remove package {0}: {1}" -f $package.Name, $_)
         }
     }
-    
     Start-Sleep -Seconds 2
 }
 
-# Função principal de instalação
-function Install-ZabbixSilent {
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Instalação Silenciosa do Zabbix Agent" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Configurações detectadas:" -ForegroundColor White
-    Write-Host "  - Servidor Zabbix: $zabbixServerIp" -ForegroundColor Gray
-    Write-Host "  - Proxy Zabbix: $zabbixProxyIp" -ForegroundColor Gray
-    Write-Host "  - Hostname: $zabbixHostname" -ForegroundColor Green
-    Write-Host ""
-    
-    # Verificar se já está instalado
+function Install-ZabbixSilentInternal {
+    $settings = Import-InstallSettings
+
+    if ($settings.CheckInternet) {
+        $to = if ($settings.NetworkTimeoutSeconds) { [int]$settings.NetworkTimeoutSeconds } else { 30 }
+        Test-InstallInternet -TimeoutSeconds $to | Out-Null
+    }
+
+    $zabbixAgentUrl = if ($MsiUrl) { $MsiUrl } else { $settings.ZabbixMsiUrl }
+    $zabbixServerIp = if ($ZabbixServer) { $ZabbixServer } else { $settings.ZabbixServer }
+    $zabbixProxyIp = if ($ZabbixServerActive) { $ZabbixServerActive } else { $settings.ZabbixServerActive }
+
+    $uriObj = $null
+    if (-not [System.Uri]::TryCreate($zabbixAgentUrl, [System.UriKind]::Absolute, [ref]$uriObj)) {
+        Write-InstallError 'Invalid Zabbix MSI URL.'
+        return $false
+    }
+    $fileName = [System.IO.Path]::GetFileName($uriObj.LocalPath)
+    if ([string]::IsNullOrWhiteSpace($fileName)) {
+        $fileName = 'zabbix_agent.msi'
+    }
+    $downloadPath = Join-Path $env:TEMP $fileName
+
+    if ($env:COMPUTERNAME) {
+        $zabbixHostname = $env:COMPUTERNAME
+    } elseif (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue) {
+        $zabbixHostname = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
+    } else {
+        $zabbixHostname = [System.Net.Dns]::GetHostName()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($zabbixHostname)) {
+        Write-InstallError 'Could not determine computer name. Aborting.'
+        return $false
+    }
+
+    $configPaths = @(
+        'C:\Program Files\Zabbix Agent\zabbix_agentd.conf',
+        'C:\Program Files (x86)\Zabbix Agent\zabbix_agentd.conf',
+        'C:\Program Files\Zabbix Agent 2\zabbix_agent2.conf',
+        'C:\Program Files (x86)\Zabbix Agent 2\zabbix_agent2.conf'
+    )
+
+    Write-InstallHeader 'Zabbix Agent (silent)'
+    Write-InstallInfo ("Zabbix server: {0}" -f $zabbixServerIp)
+    Write-InstallInfo ("ServerActive (proxy): {0}" -f $zabbixProxyIp)
+    Write-InstallInfo ("Hostname: {0}" -f $zabbixHostname)
+
     if (Test-ZabbixInstalled) {
-        Write-Host "Zabbix já está instalado. Removendo instalação anterior..." -ForegroundColor Yellow
         Remove-ZabbixPrevious
         Start-Sleep -Seconds 3
     }
-    
-    # Download do agente Zabbix
-    Write-Host "[1/5] Baixando o agente Zabbix..." -ForegroundColor Yellow
+
+    Write-InstallInfo '[1/5] Downloading Zabbix Agent MSI...'
     try {
         Invoke-WebRequest -Uri $zabbixAgentUrl -OutFile $downloadPath -UseBasicParsing -ErrorAction Stop
-        Write-Host "Download concluído com sucesso." -ForegroundColor Green
+        Write-InstallSuccess 'Download completed.'
     } catch {
-        Write-Error "Erro ao baixar o agente Zabbix: $_"
+        Write-InstallError ("Download failed: {0}" -f $_)
         return $false
     }
-    
-    # Instalação silenciosa
-    Write-Host "[2/5] Instalando o agente Zabbix (modo silencioso)..." -ForegroundColor Yellow
+
+    Write-InstallInfo '[2/5] Installing (silent)...'
     try {
         $installArgs = @(
-            "/i",
-            "`"$downloadPath`"",
-            "/qn",                                    # Modo silencioso (sem interface)
-            "/norestart",                             # Não reiniciar
-            "SERVER=$zabbixServerIp",                 # IP do servidor Zabbix
-            "SERVERACTIVE=$zabbixProxyIp",            # IP do proxy Zabbix
-            "HOSTNAME=$zabbixHostname"                # Hostname do computador
+            '/i', "`"$downloadPath`"",
+            '/qn',
+            '/norestart',
+            "SERVER=$zabbixServerIp",
+            "SERVERACTIVE=$zabbixProxyIp",
+            "HOSTNAME=$zabbixHostname"
         )
-        
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
-        
+        $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
         if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
-            Write-Host "Instalação concluída com sucesso." -ForegroundColor Green
+            Write-InstallSuccess ('Installation finished (exit code {0}).' -f $process.ExitCode)
         } else {
-            Write-Warning "Instalação concluída com código de saída: $($process.ExitCode)"
+            Write-InstallWarning ('msiexec exit code: {0}' -f $process.ExitCode)
         }
     } catch {
-        Write-Error "Erro durante a instalação: $_"
+        Write-InstallError ("Install failed: {0}" -f $_)
         return $false
     }
-    
+
     Start-Sleep -Seconds 3
-    
-    # Localizar arquivo de configuração
-    Write-Host "[3/5] Localizando arquivo de configuração..." -ForegroundColor Yellow
+
+    Write-InstallInfo '[3/5] Locating configuration file...'
     $configPath = $null
     foreach ($path in $configPaths) {
-        if (Test-Path -Path $path) {
+        if (Test-Path -LiteralPath $path) {
             $configPath = $path
-            Write-Host "Arquivo de configuração encontrado: $configPath" -ForegroundColor Green
             break
         }
     }
-    
     if (-not $configPath) {
-        Write-Warning "Arquivo de configuração não encontrado nos caminhos esperados."
-        Write-Host "Tentando localizar manualmente..." -ForegroundColor Yellow
-        
-        # Buscar em todos os diretórios do Zabbix
-        $zabbixDirs = @(
-            "C:\Program Files\Zabbix*",
-            "C:\Program Files (x86)\Zabbix*"
-        )
-        
-        foreach ($dirPattern in $zabbixDirs) {
+        foreach ($dirPattern in @('C:\Program Files\Zabbix*', 'C:\Program Files (x86)\Zabbix*')) {
             $dirs = Get-ChildItem -Path $dirPattern -Directory -ErrorAction SilentlyContinue
             foreach ($dir in $dirs) {
-                $possibleConfig = Join-Path $dir.FullName "*agent*.conf"
-                $found = Get-ChildItem -Path $possibleConfig -ErrorAction SilentlyContinue | Select-Object -First 1
+                $found = Get-ChildItem -Path (Join-Path $dir.FullName '*agent*.conf') -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($found) {
                     $configPath = $found.FullName
-                    Write-Host "Arquivo de configuração encontrado: $configPath" -ForegroundColor Green
                     break
                 }
             }
             if ($configPath) { break }
         }
     }
-    
-    # Configurar o agente Zabbix
+
     if ($configPath) {
-        Write-Host "[4/5] Configurando o agente Zabbix..." -ForegroundColor Yellow
+        Write-InstallInfo '[4/5] Updating configuration...'
         try {
-            $configContent = Get-Content -Path $configPath -Raw
-            
-            # Atualizar configurações
-            $configContent = $configContent -replace "(?m)^Server=.*", "Server=$zabbixServerIp"
-            $configContent = $configContent -replace "(?m)^ServerActive=.*", "ServerActive=$zabbixProxyIp"
-            $configContent = $configContent -replace "(?m)^Hostname=.*", "Hostname=$zabbixHostname"
-            
-            # Remover comentários das linhas se necessário
-            $configContent = $configContent -replace "(?m)^#\s*Server=.*", "Server=$zabbixServerIp"
-            $configContent = $configContent -replace "(?m)^#\s*ServerActive=.*", "ServerActive=$zabbixProxyIp"
-            $configContent = $configContent -replace "(?m)^#\s*Hostname=.*", "Hostname=$zabbixHostname"
-            
-            # Salvar configuração
-            Set-Content -Path $configPath -Value $configContent -NoNewline
-            
-            Write-Host "Configuração atualizada:" -ForegroundColor Green
-            Write-Host "  - Server: $zabbixServerIp" -ForegroundColor Gray
-            Write-Host "  - ServerActive: $zabbixProxyIp" -ForegroundColor Gray
-            Write-Host "  - Hostname: $zabbixHostname" -ForegroundColor Gray
+            if ($settings.AutoBackup) {
+                $bak = '{0}.backup.{1}' -f $configPath, (Get-Date -Format 'yyyyMMdd_HHmmss')
+                Copy-Item -LiteralPath $configPath -Destination $bak -Force
+                Write-InstallInfo ("Backup: {0}" -f $bak)
+            }
+            $configContent = Get-Content -LiteralPath $configPath -Raw
+            $configContent = $configContent -replace '(?m)^Server=.*', "Server=$zabbixServerIp"
+            $configContent = $configContent -replace '(?m)^ServerActive=.*', "ServerActive=$zabbixProxyIp"
+            $configContent = $configContent -replace '(?m)^Hostname=.*', "Hostname=$zabbixHostname"
+            $configContent = $configContent -replace '(?m)^#\s*Server=.*', "Server=$zabbixServerIp"
+            $configContent = $configContent -replace '(?m)^#\s*ServerActive=.*', "ServerActive=$zabbixProxyIp"
+            $configContent = $configContent -replace '(?m)^#\s*Hostname=.*', "Hostname=$zabbixHostname"
+            Set-Content -LiteralPath $configPath -Value $configContent -NoNewline
+            Write-InstallSuccess 'Configuration updated.'
         } catch {
-            Write-Error "Erro ao configurar o agente Zabbix: $_"
-            return $false
+            Write-InstallWarning ("Could not update config: {0}" -f $_)
         }
     } else {
-        Write-Warning "Não foi possível localizar o arquivo de configuração. A configuração pode precisar ser feita manualmente."
+        Write-InstallWarning 'Configuration file not found; verify paths after install.'
     }
-    
-    # Iniciar/Reiniciar serviço
-    Write-Host "[5/5] Iniciando serviço do Zabbix Agent..." -ForegroundColor Yellow
+
+    Write-InstallInfo '[5/5] Starting Zabbix service...'
     Start-Sleep -Seconds 2
-    
     try {
-        $zabbixService = Get-Service -Name "Zabbix*" -ErrorAction Stop
-        
-        if ($zabbixService.Status -ne "Running") {
+        $zabbixService = Get-Service -Name 'Zabbix*' -ErrorAction Stop
+        if ($zabbixService.Status -ne 'Running') {
             Start-Service -Name $zabbixService.Name -ErrorAction Stop
-            Write-Host "Serviço iniciado com sucesso." -ForegroundColor Green
         } else {
             Restart-Service -Name $zabbixService.Name -ErrorAction Stop
-            Write-Host "Serviço reiniciado com sucesso." -ForegroundColor Green
         }
-        
-        Start-Sleep -Seconds 2
-        $finalStatus = (Get-Service -Name $zabbixService.Name).Status
-        Write-Host "Status do serviço: $finalStatus" -ForegroundColor $(if ($finalStatus -eq "Running") { "Green" } else { "Yellow" })
+        Write-InstallSuccess ('Service {0} is running.' -f $zabbixService.Name)
     } catch {
-        Write-Warning "Não foi possível iniciar o serviço automaticamente. Verifique manualmente: $_"
+        Write-InstallWarning ("Could not start service automatically: {0}" -f $_)
     }
-    
-    # Limpeza
-    Write-Host ""
-    Write-Host "Limpando arquivos temporários..." -ForegroundColor Yellow
-    if (Test-Path $downloadPath) {
-        Remove-Item -Path $downloadPath -Force -ErrorAction SilentlyContinue
+
+    if (Test-Path -LiteralPath $downloadPath) {
+        Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
     }
-    
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Instalação concluída!" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Resumo da instalação:" -ForegroundColor White
-    Write-Host "  - Servidor Zabbix: $zabbixServerIp" -ForegroundColor Gray
-    Write-Host "  - Proxy Zabbix: $zabbixProxyIp" -ForegroundColor Gray
-    Write-Host "  - Hostname: $zabbixHostname" -ForegroundColor Gray
-    Write-Host ""
-    
+
+    Write-InstallSuccess 'Zabbix Agent installation completed.'
     return $true
 }
 
-# Executar instalação
 try {
-    $result = Install-ZabbixSilent
-    if ($result) {
-        exit 0
-    } else {
-        exit 1
+    if (-not (Test-InstallAdministrator)) {
+        Write-Host 'Administrator rights required. Relaunching elevated...' -ForegroundColor Yellow
+        $path = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+        Start-Process PowerShell.exe -Verb RunAs -ArgumentList '-NoExit', '-File', "`"$path`""
+        exit
     }
+
+    Initialize-InstallLogging -Prefix 'zabbix'
+    $ok = Install-ZabbixSilentInternal
+    exit ($(if ($ok) { 0 } else { 1 }))
 } catch {
-    Write-Error "Erro fatal durante a instalação: $_"
+    Write-InstallError $_.Exception.Message
     exit 1
 }
-
