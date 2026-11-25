@@ -46,7 +46,17 @@
     }
 
     Sophos = @{
-        # Link de download gerado no Sophos Central (contem o token do tenant).
-        InstallerUrl = 'https://api.stn100gru.ctr.sophos.com/api/download/REMOVED_TOKEN/SophosSetup.exe'
+        # Repositorio interno (share SMB) com o bootstrapper baixado do Sophos Central.
+        # Deixe Repository vazio para pular a fonte interna.
+        Repository    = '\\10.130.2.10\Implatacao_Sophos'
+        InstallerName = 'SophosSetup.exe'
+
+        # Hash SHA256 esperado do binario (vazio = nao valida).
+        # Ao trocar o instalador no share, atualize este valor.
+        Sha256        = '37dd568aef56c24f799c8b886c15ea2f56490259ef7bf9c2472ea209d0d07bf6'
+
+        # Fonte alternativa (URL) usada somente se o share estiver indisponivel.
+        # Deixe vazio para exigir o repositorio interno.
+        FallbackUrl   = ''
     }
 }

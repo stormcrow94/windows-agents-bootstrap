@@ -1,18 +1,24 @@
 <#
     Install-Sophos.ps1 - instala o Sophos Endpoint pelo bootstrapper do Central.
 
-    O SophosSetup.exe e um bootstrapper: ele baixa o produto do CDN da Sophos,
-    portanto o host precisa de acesso a internet. O token do tenant vem embutido
-    na URL de download gerada no Sophos Central.
+    A fonte padrao e o repositorio interno configurado em config/settings.psd1
+    (Sophos.Repository + InstallerName). O SophosSetup.exe e um bootstrapper:
+    ele baixa o produto do CDN da Sophos, portanto o host precisa de acesso a
+    internet. O token do tenant so e usado para baixar o bootstrapper uma vez,
+    no servidor que publica o arquivo no share.
 
     Uso:
         powershell -ExecutionPolicy Bypass -File .\scripts\Install-Sophos.ps1
         powershell -ExecutionPolicy Bypass -File .\scripts\Install-Sophos.ps1 -Force
+        powershell -ExecutionPolicy Bypass -File .\scripts\Install-Sophos.ps1 -DryRun
+        powershell -ExecutionPolicy Bypass -File .\scripts\Install-Sophos.ps1 -SourcePath D:\temp\SophosSetup.exe
 #>
 [CmdletBinding()]
 param(
     [string]$ConfigPath,
-    [switch]$Force
+    [string]$SourcePath,
+    [switch]$Force,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,17 +46,85 @@ try {
     }
 
     # ---------------------------------------------------------------
-    # Download e validacao do binario
+    # Resolucao da fonte: -SourcePath -> repositorio interno -> cache -> FallbackUrl
     # ---------------------------------------------------------------
     $exePath = Join-Path $config.Common.CacheDir 'SophosSetup.exe'
 
-    if (-not $Force -and (Test-Path -LiteralPath $exePath) -and (Get-Item -LiteralPath $exePath).Length -gt 1MB) {
-        Write-Log -Message "Instalador em cache: $exePath" -Level INFO
+    function Get-FileSha256 {
+        param([string]$Path)
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $source = $null
+
+    if ($SourcePath) {
+        if (-not (Test-Path -LiteralPath $SourcePath)) { throw "SourcePath nao encontrado: $SourcePath" }
+        $source = (Resolve-Path -LiteralPath $SourcePath).Path
+        Write-Log -Message "Fonte informada manualmente: $source" -Level INFO
+    }
+    elseif ($s.Repository) {
+        $repoFile = Join-Path $s.Repository $s.InstallerName
+        if (Test-Path -LiteralPath $repoFile) {
+            $source = $repoFile
+            Write-Log -Message "Fonte: repositorio interno $repoFile" -Level INFO
+        }
+        else {
+            Write-Log -Message "Repositorio interno indisponivel: $repoFile" -Level WARN
+        }
+    }
+
+    if (-not $source -and (Test-Path -LiteralPath $exePath)) {
+        $source = $exePath
+        Write-Log -Message "Fonte: cache local $exePath" -Level INFO
+    }
+
+    if (-not $source) {
+        if ($s.FallbackUrl) {
+            Write-Log -Message 'Baixando do FallbackUrl...' -Level STEP
+            $null = Invoke-VtxDownload -Url $s.FallbackUrl -Destination $exePath
+            $source = $exePath
+        }
+        else {
+            throw 'Nenhuma fonte disponivel: repositorio interno inacessivel, sem cache e sem FallbackUrl.'
+        }
+    }
+
+    if ($source -ne $exePath) {
+        $parent = Split-Path -Parent $exePath
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+
+        $reuseCache = $false
+        if (-not $Force -and (Test-Path -LiteralPath $exePath)) {
+            if ((Get-FileSha256 -Path $exePath) -eq (Get-FileSha256 -Path $source)) {
+                Write-Log -Message 'Cache local identico a fonte; reutilizando.' -Level INFO
+                $reuseCache = $true
+            }
+        }
+
+        if ($reuseCache) {
+            $source = $exePath
+        }
+        else {
+            Copy-Item -LiteralPath $source -Destination $exePath -Force
+            $source = $exePath
+            Write-Log -Message ("Copiado para o cache ({0:N0} bytes)" -f (Get-Item -LiteralPath $exePath).Length) -Level OK
+        }
+    }
+
+    $exePath = $source
+
+    # ---------------------------------------------------------------
+    # Integridade: hash configurado + assinatura Authenticode
+    # ---------------------------------------------------------------
+    $hash = Get-FileSha256 -Path $exePath
+    if ($s.Sha256) {
+        if ($hash -ne $s.Sha256.ToLowerInvariant()) {
+            throw "Hash SHA256 nao confere. Esperado $($s.Sha256), obtido $hash. Se a troca do instalador foi intencional, atualize Sophos.Sha256 no settings.psd1."
+        }
+        Write-Log -Message 'SHA256 confere com o settings.psd1.' -Level OK
     }
     else {
-        Write-Log -Message "Baixando $($s.InstallerUrl)" -Level STEP
-        $size = Invoke-VtxDownload -Url $s.InstallerUrl -Destination $exePath
-        Write-Log -Message ("Download concluido ({0:N0} bytes)" -f $size) -Level OK
+        Write-Log -Message "SHA256 do binario: $hash (sem hash de referencia configurado)." -Level INFO
     }
 
     $signature = Get-AuthenticodeSignature -LiteralPath $exePath
@@ -58,6 +132,11 @@ try {
         throw "Assinatura digital invalida em $exePath (status: $($signature.Status))."
     }
     Write-Log -Message "Assinatura verificada: $($signature.SignerCertificate.Subject)" -Level INFO
+
+    if ($DryRun) {
+        Write-Log -Message 'DryRun: fonte, hash e assinatura validados; nada foi instalado.' -Level OK
+        exit 0
+    }
 
     # ---------------------------------------------------------------
     # Instalacao silenciosa

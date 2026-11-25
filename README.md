@@ -61,7 +61,10 @@ Tudo fica em `config\settings.psd1`. Edite o arquivo, nao os scripts.
 | `Wazuh.Manager` | `wazuh.vantix.com.br` | Endereco do manager (1514) |
 | `Wazuh.RegistrationServer` | `wazuh.vantix.com.br` | authd (1515) |
 | `Wazuh.AgentGroup` | `COMMCENTER` | Grupo aplicado no registro |
-| `Sophos.InstallerUrl` | link do Central | Contem o token do tenant |
+| `Sophos.Repository` | `\\10.130.2.10\Implatacao_Sophos` | Share interno com o bootstrapper |
+| `Sophos.InstallerName` | `SophosSetup.exe` | Nome do arquivo no share |
+| `Sophos.Sha256` | hash do arquivo atual | Impede executar binario trocado; vazio desativa |
+| `Sophos.FallbackUrl` | vazio | URL usada so se o share estiver indisponivel |
 
 ## O que cada script faz
 
@@ -87,13 +90,17 @@ Tudo fica em `config\settings.psd1`. Edite o arquivo, nao os scripts.
 
 ### Sophos (`scripts\Install-Sophos.ps1`)
 
-1. Baixa o `SophosSetup.exe` da URL do Central (token do tenant embutido).
-2. Valida a assinatura digital antes de executar.
+1. Resolve o binario nesta ordem: `-SourcePath`, share interno (`Sophos.Repository`),
+   cache local, `Sophos.FallbackUrl`.
+2. Confere o SHA256 configurado e a assinatura digital antes de executar.
 3. Instala com `--quiet` e trata exit `3010` (reinicio pendente).
 4. Aguarda os servicos `Sophos MCS Agent` e `Sophos File Scanner Service`.
 
+Use `-DryRun` para validar fonte, hash e assinatura sem instalar.
+
 O `SophosSetup.exe` e um bootstrapper: ele baixa o produto do CDN da Sophos
-durante a instalacao, portanto o host precisa de internet.
+durante a instalacao, portanto o host precisa de internet. O share interno so
+entrega o bootstrapper; ele nao elimina a necessidade de acesso ao CDN.
 
 ### Remocao (`scripts\Remove-Zabbix.ps1`)
 
@@ -117,8 +124,10 @@ da configuracao. Use `-RemoveFiles` para apagar tambem os diretorios.
 **Zabbix sem coleta** - o servico pode estar ativo e o host nao existir no
 servidor. Verifique `ServerActive`, a porta `10050` e o cadastro do host.
 
-**Sophos nao instala** - confirme que a URL do Central nao expirou (o link e
-gerado no console) e que o host alcanca o CDN da Sophos.
+**Sophos nao instala** - confirme que o share `\\10.130.2.10\Implatacao_Sophos` esta
+acessivel e que o hash em `Sophos.Sha256` corresponde ao arquivo publicado. Se o
+instalador foi trocado de proposito, atualize o hash. O host tambem precisa alcancar
+o CDN da Sophos.
 
 **Servico marcado para exclusao** - apos remover um servico legado, o nome so
 fica livre quando todos os handles fecham. Se o MSI falhar com esse erro,
