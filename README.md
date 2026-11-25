@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="windows-agents-bootstrap: instalação silenciosa de Zabbix, Wazuh e Sophos em servidores Windows via PowerShell" width="100%">
+</p>
+
 # Instalador Vantix - Windows
 
 Instalacao silenciosa e idempotente dos agentes usados nos servidores Windows:
@@ -131,4 +135,5 @@ scripts\Install-Zabbix.ps1
 scripts\Install-Sophos.ps1
 scripts\Install-Wazuh.ps1
 scripts\Remove-Zabbix.ps1
+assets\                      banner e social preview
 ```
