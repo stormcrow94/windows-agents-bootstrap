@@ -92,7 +92,8 @@ Tudo fica em `config\settings.psd1`. Edite o arquivo, nao os scripts.
 
 1. Resolve o binario nesta ordem: `-SourcePath`, share interno (`Sophos.Repository`),
    cache local, `Sophos.FallbackUrl`.
-2. Confere o SHA256 configurado e a assinatura digital antes de executar.
+2. Confere o SHA256 configurado e a assinatura digital (inclusive o signatario,
+   que deve ser `SOPHOS LTD`) antes de executar.
 3. Instala com `--quiet` e trata exit `3010` (reinicio pendente).
 4. Aguarda os servicos `Sophos MCS Agent` e `Sophos File Scanner Service`.
 
@@ -101,6 +102,14 @@ Use `-DryRun` para validar fonte, hash e assinatura sem instalar.
 O `SophosSetup.exe` e um bootstrapper: ele baixa o produto do CDN da Sophos
 durante a instalacao, portanto o host precisa de internet. O share interno so
 entrega o bootstrapper; ele nao elimina a necessidade de acesso ao CDN.
+
+O link de download gerado no Sophos Central e especifico do tenant: quem tem o
+arquivo (ou a URL) pode registrar dispositivos no tenant. Por isso a URL nao
+fica no repositorio. O binario vem do share interno, tem o SHA256 conferido e a
+assinatura verificada contra o signatario `SOPHOS LTD`. Restrinja a permissao do
+share ao grupo de implantacao (leitura) e ao time que publica o arquivo
+(escrita); `Everyone` com escrita permite substituir o instalador e bloquear a
+instalacao ou distribuir um binario nao autorizado.
 
 ### Remocao (`scripts\Remove-Zabbix.ps1`)
 

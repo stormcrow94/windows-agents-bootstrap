@@ -39,7 +39,7 @@ try {
     $installed = Get-InstalledProduct -NamePattern '^Sophos Endpoint Agent'
     $mcs = Get-Service -Name 'Sophos MCS Agent' -ErrorAction SilentlyContinue
 
-    if (-not $Force -and $installed -and $mcs) {
+    if (-not $Force -and -not $DryRun -and $installed -and $mcs) {
         $version = ($installed | Select-Object -First 1).DisplayVersion
         Write-Log -Message "Sophos Endpoint ja instalado (versao $version) e MCS Agent presente. Nada a fazer." -Level OK
         exit 0
@@ -130,6 +130,9 @@ try {
     $signature = Get-AuthenticodeSignature -LiteralPath $exePath
     if ($signature.Status -ne 'Valid') {
         throw "Assinatura digital invalida em $exePath (status: $($signature.Status))."
+    }
+    if ($signature.SignerCertificate.Subject -notmatch 'O=Sophos Ltd') {
+        throw "Signatario inesperado em $exePath : $($signature.SignerCertificate.Subject). Esperado Sophos Ltd."
     }
     Write-Log -Message "Assinatura verificada: $($signature.SignerCertificate.Subject)" -Level INFO
 
