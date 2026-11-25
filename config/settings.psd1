@@ -1,14 +1,14 @@
 <#
-    Configuracao central dos instaladores Vantix.
+    Configuracao central dos instaladores de agentes para Windows.
 
     Edite este arquivo em vez de alterar os scripts.
     Os caminhos de cache, log e backup sao criados automaticamente.
 #>
 @{
     Common = @{
-        LogDir    = 'C:\ProgramData\Vantix\install-logs'
-        CacheDir  = 'C:\ProgramData\Vantix\cache'
-        BackupDir = 'C:\ProgramData\Vantix\backup'
+        LogDir    = 'C:\ProgramData\AgentsBootstrap\install-logs'
+        CacheDir  = 'C:\ProgramData\AgentsBootstrap\cache'
+        BackupDir = 'C:\ProgramData\AgentsBootstrap\backup'
     }
 
     Zabbix = @{

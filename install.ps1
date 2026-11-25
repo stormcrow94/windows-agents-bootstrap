@@ -1,5 +1,5 @@
 <#
-    install.ps1 - ponto de entrada dos instaladores Vantix para Windows.
+    install.ps1 - ponto de entrada dos instaladores de agentes para Windows.
 
     Sem parametros abre o menu interativo. Com flags executa direto:
 
@@ -59,7 +59,7 @@ function Show-Menu {
     while ($true) {
         Write-Host ''
         Write-Host '=============================================' -ForegroundColor Cyan
-        Write-Host ' Instalador Vantix - Windows' -ForegroundColor Cyan
+        Write-Host ' Windows Agents Bootstrap' -ForegroundColor Cyan
         Write-Host '=============================================' -ForegroundColor Cyan
         Write-Host ' 1) Zabbix Agent'
         Write-Host ' 2) Sophos Endpoint'
@@ -108,7 +108,7 @@ else {
 
 if ($failures -gt 0) {
     Write-Host ''
-    Write-Host ("Concluido com {0} falha(s). Veja os logs em C:\ProgramData\Vantix\install-logs" -f $failures) -ForegroundColor Red
+    Write-Host ("Concluido com {0} falha(s). Veja os logs em C:\ProgramData\AgentsBootstrap\install-logs" -f $failures) -ForegroundColor Red
     exit 1
 }
 

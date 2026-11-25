@@ -1,5 +1,5 @@
 <#
-    Common.ps1 - funcoes compartilhadas pelos instaladores Vantix.
+    Common.ps1 - funcoes compartilhadas pelos instaladores de agentes para Windows.
 
     Compativel com Windows PowerShell 5.1 (padrao do Windows Server 2016+).
     Nao usa recursos de PowerShell 7 (ternario, ??, -Parallel).
@@ -13,7 +13,7 @@ function Initialize-VtxLog {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [string]$LogDir = 'C:\ProgramData\Vantix\install-logs'
+        [string]$LogDir = 'C:\ProgramData\AgentsBootstrap\install-logs'
     )
 
     if (-not (Test-Path -LiteralPath $LogDir)) {

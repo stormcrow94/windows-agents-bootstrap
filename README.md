@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="windows-agents-bootstrap: instalação silenciosa de Zabbix, Wazuh e Sophos em servidores Windows via PowerShell" width="100%">
 </p>
 
-# Instalador Vantix - Windows
+# Windows Agents Bootstrap
 
 Instalacao silenciosa e idempotente dos agentes usados nos servidores Windows:
 **Zabbix Agent**, **Sophos Endpoint** e **Wazuh Agent**.
@@ -18,6 +18,28 @@ versoes vencidas e nao validavam o resultado real da instalacao.
 - Acesso HTTPS a `cdn.zabbix.com`, `packages.wazuh.com` e ao CDN da Sophos
 - Acesso TCP ao proxy Zabbix (`10.130.3.201:10051`) e ao manager Wazuh
   (`wazuh.vantix.com.br:1514` e `:1515`)
+
+## Instalacao em uma linha (servidor novo)
+
+Baixa o repositorio e executa o instalador sem clonar nada. O `bootstrap.ps1` se eleva
+sozinho (UAC), copia os arquivos para `C:\ProgramData\AgentsBootstrap` e chama o `install.ps1`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/stormcrow94/windows-agents-bootstrap/main/bootstrap.ps1 -OutFile $env:TEMP\bootstrap.ps1; & $env:TEMP\bootstrap.ps1 -Component All"
+```
+
+Sem `-Component` o menu interativo abre. Valores aceitos: `Menu`, `All`, `Zabbix`, `Wazuh`,
+`Sophos`, `RemoveZabbix`.
+
+Opcoes uteis:
+
+| Opcao | Efeito |
+| --- | --- |
+| `-DownloadOnly` | baixa e copia os arquivos, sem executar nada |
+| `-KeepSettings` | preserva o `config\settings.psd1` existente no destino |
+| `-InstallDir <caminho>` | destino (padrao `$env:ProgramData\AgentsBootstrap`) |
+| `-Force` | repassa `-Force` ao instalador (reinstala mesmo na mesma versao) |
+| `-Repo` / `-Branch` | repositorio e branch alternativos |
 
 ## Uso
 
@@ -73,7 +95,7 @@ Tudo fica em `config\settings.psd1`. Edite o arquivo, nao os scripts.
 1. Le a configuracao existente e **preserva `Server`/`ServerActive`**.
 2. Resolve o ultimo patch do branch no CDN (`zabbix_agent-<versao>-windows-amd64-openssl.msi`).
 3. Detecta instalacao fora do MSI (ex.: `C:\Zabbix\zabbix_agentd.exe`), faz
-   backup da config em `C:\ProgramData\Vantix\backup` e remove o servico antigo.
+   backup da config em `C:\ProgramData\AgentsBootstrap\backup` e remove o servico antigo.
 4. Instala/atualiza via `msiexec /qn`.
 5. Reaplica as diretivas no `zabbix_agentd.conf`, reinicia o servico e valida:
    servico `Running`, porta `10050` ouvindo e log com `Starting Zabbix Agent`.
@@ -118,9 +140,9 @@ da configuracao. Use `-RemoveFiles` para apagar tambem os diretorios.
 
 ## Logs e backups
 
-- Logs: `C:\ProgramData\Vantix\install-logs`
-- Cache de instaladores: `C:\ProgramData\Vantix\cache`
-- Backups: `C:\ProgramData\Vantix\backup`
+- Logs: `C:\ProgramData\AgentsBootstrap\install-logs`
+- Cache de instaladores: `C:\ProgramData\AgentsBootstrap\cache`
+- Backups: `C:\ProgramData\AgentsBootstrap\backup`
 - Logs do MSI: `zabbix_msi_*.log`, `wazuh_msi_*.log`, `zabbix_uninstall_*.log`
 
 ## Solucao de problemas
